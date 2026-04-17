@@ -1,0 +1,83 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Tests
+        run: pytest -v
+
+  build:
+    name: Build & Push Docker Image
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build Docker Image (smoke)
+        # Always build, so the pipeline works even before Docker Hub secrets are set.
+        run: docker build -t myapp:latest .
+
+      - name: Login to Docker Hub
+        # Only push to Docker Hub if credentials are configured in repo secrets.
+        if: ${{ secrets.DOCKER_USERNAME != '' && secrets.DOCKER_PASSWORD != '' }}
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Tag Image for Docker Hub
+        if: ${{ secrets.DOCKER_USERNAME != '' && secrets.DOCKER_PASSWORD != '' }}
+        run: |
+          docker tag myapp:latest ${{ secrets.DOCKER_USERNAME }}/myapp:latest
+          docker tag myapp:latest ${{ secrets.DOCKER_USERNAME }}/myapp:${{ github.sha }}
+
+      - name: Push Image to Docker Hub
+        if: ${{ secrets.DOCKER_USERNAME != '' && secrets.DOCKER_PASSWORD != '' }}
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/myapp:latest
+          docker push ${{ secrets.DOCKER_USERNAME }}/myapp:${{ github.sha }}
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Simulated Deployment
+        run: |
+          echo "Deploying application..."
+          echo "Version: ${{ github.sha }}"
+          echo "(In a real setup this step would SSH to a VM and pull+run the image)"
+
+      # ------------------------------------------------------------------
+      # OPTIONAL: real deployment to a remote server via SSH.
+      # Uncomment and configure these secrets to enable:
+      #   SERVER_IP, SERVER_USER, SERVER_SSH_KEY
+      # ------------------------------------------------------------------
+      # - name: Deploy via SSH
+      #   if: ${{ secrets.SERVER_IP != '' }}
+      #   uses: appleboy/ssh-action@v1.0.0
+      #   with:
+      #     host: ${{ secrets.SERVER_IP }}
+      #     username: ${{ secrets.SERVER_USER }}
+      #     key: ${{ secrets.SERVER_SSH_KEY }}
+      #     script: |
+      #       docker pull ${{ secrets.DOCKER_USERNAME }}/myapp:latest
+      #       docker stop myapp || true
+      #       docker rm myapp || true
+      #       docker run -d -p 80:80 --name myapp ${{ secrets.DOCKER_USERNAME }}/myapp:latest
